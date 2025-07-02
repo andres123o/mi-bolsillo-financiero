@@ -7,11 +7,9 @@ import { toast } from "@/hooks/use-toast";
 import { Calculator, Target, TrendingDown, Calendar } from "lucide-react";
 
 interface ResultadoCalculo {
-  ahorroMensual: number;
-  fechaFinalizacion: string;
-  recomendaciones: string[];
-  montoMeta: number;
-  plazoMeses: number;
+  cantidadMensual: number;
+  fechaProyectada: string;
+  recomendaciones: Record<string, string | { categoria?: string; sugerencia?: string } | object>;
 }
 
 export function CalculadoraMetas() {
@@ -27,89 +25,31 @@ export function CalculadoraMetas() {
     }).format(value);
   };
 
-  const procesarConsulta = (consulta: string): ResultadoCalculo | null => {
-    // Expresiones regulares para extraer información
-    const montoRegex = /(\d+(?:\.\d+)?)\s*(?:millones?|m)/i;
-    const plazoRegex = /(\d+)\s*(?:meses?|años?|año)/i;
-    const porcentajeRegex = /(\d+)%/;
+  const llamarWebhook = async (prompt: string): Promise<ResultadoCalculo | null> => {
+    try {
+      const url = `https://andresolaya.app.n8n.cloud/webhook-test/c5f1788b-e13e-4f9a-8d2e-ff5ea133bd16?prompt=${encodeURIComponent(prompt)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+      });
 
-    let montoMeta = 0;
-    let plazoMeses = 12;
-
-    // Extraer monto
-    const montoMatch = consulta.match(montoRegex);
-    if (montoMatch) {
-      montoMeta = parseFloat(montoMatch[1]) * 1000000; // Convertir millones a pesos
-    } else {
-      // Buscar números grandes (asumiendo que son pesos directamente)
-      const numeroGrande = consulta.match(/(\d{1,3}(?:\.\d{3})+)/);
-      if (numeroGrande) {
-        montoMeta = parseInt(numeroGrande[1].replace(/\./g, ''));
+      if (!response.ok) {
+        throw new Error('Error en la respuesta del webhook');
       }
-    }
 
-    // Extraer plazo
-    const plazoMatch = consulta.match(plazoRegex);
-    if (plazoMatch) {
-      const numero = parseInt(plazoMatch[1]);
-      if (consulta.toLowerCase().includes('año')) {
-        plazoMeses = numero * 12;
-      } else {
-        plazoMeses = numero;
-      }
-    }
-
-    if (montoMeta === 0) {
+      const data = await response.json();
+      
+      return {
+        cantidadMensual: data["Cantidad mensual de ahorro requerida"],
+        fechaProyectada: data["Fecha proyectada de finalización"],
+        recomendaciones: data["Recomendaciones de reducción de gastos"]
+      };
+    } catch (error) {
+      console.error('Error al llamar al webhook:', error);
       return null;
     }
-
-    const ahorroMensual = montoMeta / plazoMeses;
-    const fechaActual = new Date();
-    const fechaFinalizacion = new Date(fechaActual.getTime() + (plazoMeses * 30 * 24 * 60 * 60 * 1000));
-
-    // Generar recomendaciones basadas en el monto
-    const recomendaciones = [];
-    
-    if (ahorroMensual > 1000000) {
-      recomendaciones.push("Considera reducir gastos en entretenimiento y restaurantes");
-      recomendaciones.push("Busca ingresos adicionales o un trabajo de medio tiempo");
-      recomendaciones.push("Revisa suscripciones y servicios que no uses frecuentemente");
-    } else if (ahorroMensual > 500000) {
-      recomendaciones.push("Reduce gastos en compras no esenciales");
-      recomendaciones.push("Utiliza cupones y ofertas para las compras necesarias");
-      recomendaciones.push("Considera cocinar más en casa en lugar de comer fuera");
-    } else {
-      recomendaciones.push("Establece un presupuesto mensual y síguelo estrictamente");
-      recomendaciones.push("Automatiza tu ahorro para que sea más fácil cumplir la meta");
-      recomendaciones.push("Busca formas de aumentar tus ingresos gradualmente");
-    }
-
-    // Añadir recomendaciones específicas por tipo de meta
-    if (consulta.toLowerCase().includes('casa') || consulta.toLowerCase().includes('vivienda')) {
-      recomendaciones.push("Investiga opciones de crédito hipotecario para complementar tu ahorro");
-      recomendaciones.push("Considera ahorrar primero para la cuota inicial (30% del valor)");
-    } else if (consulta.toLowerCase().includes('carro') || consulta.toLowerCase().includes('vehículo')) {
-      recomendaciones.push("Evalúa opciones de crédito vehicular con tasas preferenciales");
-      recomendaciones.push("Considera vehículos usados en buen estado para reducir el costo");
-    } else if (consulta.toLowerCase().includes('viaje') || consulta.toLowerCase().includes('vacaciones')) {
-      recomendaciones.push("Busca ofertas y promociones de temporada baja");
-      recomendaciones.push("Considera destinos locales para reducir costos de transporte");
-    }
-
-    return {
-      ahorroMensual,
-      fechaFinalizacion: fechaFinalizacion.toLocaleDateString('es-CO', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      }),
-      recomendaciones,
-      montoMeta,
-      plazoMeses
-    };
   };
 
-  const handleCalcular = () => {
+  const handleCalcular = async () => {
     if (!consulta.trim()) {
       toast({
         title: "Error",
@@ -121,9 +61,8 @@ export function CalculadoraMetas() {
 
     setCalculando(true);
     
-    // Simular procesamiento
-    setTimeout(() => {
-      const resultado = procesarConsulta(consulta);
+    try {
+      const resultado = await llamarWebhook(consulta);
       
       if (resultado) {
         setResultado(resultado);
@@ -134,13 +73,19 @@ export function CalculadoraMetas() {
       } else {
         toast({
           title: "Error en el cálculo",
-          description: "No se pudo procesar tu consulta. Asegúrate de incluir el monto y plazo deseado.",
+          description: "No se pudo procesar tu consulta. Por favor intenta de nuevo.",
           variant: "destructive",
         });
       }
-      
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Hubo un problema al procesar tu consulta. Por favor intenta de nuevo.",
+        variant: "destructive",
+      });
+    } finally {
       setCalculando(false);
-    }, 1500);
+    }
   };
 
   const ejemplosConsulta = [
@@ -205,7 +150,7 @@ export function CalculadoraMetas() {
       </Card>
 
       {resultado && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Ahorro Mensual Requerido */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -214,10 +159,10 @@ export function CalculadoraMetas() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-primary">
-                {formatCurrency(resultado.ahorroMensual)}
+                {formatCurrency(resultado.cantidadMensual)}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Para alcanzar tu meta de {formatCurrency(resultado.montoMeta)}
+                Cantidad mensual recomendada para tu meta
               </p>
             </CardContent>
           </Card>
@@ -230,26 +175,10 @@ export function CalculadoraMetas() {
             </CardHeader>
             <CardContent>
               <div className="text-lg font-bold text-success">
-                {resultado.fechaFinalizacion}
+                {resultado.fechaProyectada}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                En {resultado.plazoMeses} meses alcanzarás tu meta
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* Resumen de la Meta */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Meta Total</CardTitle>
-              <TrendingDown className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-lg font-bold text-foreground">
-                {formatCurrency(resultado.montoMeta)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Objetivo de ahorro establecido
+                Fecha estimada para alcanzar tu meta
               </p>
             </CardContent>
           </Card>
@@ -266,12 +195,22 @@ export function CalculadoraMetas() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {resultado.recomendaciones.map((recomendacion, index) => (
-                <div key={index} className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+              {Object.entries(resultado.recomendaciones).map(([categoria, recomendacion], index) => (
+                <div key={categoria} className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
                   <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium mt-0.5">
                     {index + 1}
                   </div>
-                  <p className="text-sm leading-relaxed">{recomendacion}</p>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-foreground mb-1">{categoria}</p>
+                    <p className="text-sm leading-relaxed text-muted-foreground">
+                      {typeof recomendacion === 'string' 
+                        ? recomendacion 
+                        : typeof recomendacion === 'object' && recomendacion !== null && 'sugerencia' in recomendacion
+                        ? (recomendacion as { sugerencia?: string }).sugerencia
+                        : JSON.stringify(recomendacion)
+                      }
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -280,7 +219,7 @@ export function CalculadoraMetas() {
               <h4 className="font-medium text-primary mb-2">💡 Consejo adicional</h4>
               <p className="text-sm text-foreground">
                 Considera automatizar tu ahorro configurando una transferencia automática mensual 
-                de {formatCurrency(resultado.ahorroMensual)} a una cuenta de ahorros separada. 
+                de {formatCurrency(resultado.cantidadMensual)} a una cuenta de ahorros separada. 
                 Esto te ayudará a mantener la disciplina y alcanzar tu meta más fácilmente.
               </p>
             </div>
