@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { CalendarIcon, Upload, Plus, FileText } from "lucide-react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Transaccion {
   id: string;
@@ -23,7 +24,7 @@ interface Transaccion {
   monto: number;
   metodoPago: string;
   notas?: string;
-  recibo?: File;
+  recibo?: string;
 }
 
 const categoriasPredefinidas = [
@@ -68,6 +69,32 @@ export function SeguimientoActividad() {
   const [recibo, setRecibo] = useState<File | null>(null);
   const [transacciones, setTransacciones] = useState<Transaccion[]>([]);
 
+  useEffect(() => {
+    fetchTransacciones();
+  }, []);
+
+  const fetchTransacciones = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('transacciones')
+        .select('*')
+        .order('fecha', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+      
+      const transaccionesFormateadas = (data || []).map(t => ({
+        ...t,
+        fecha: new Date(t.fecha),
+        metodoPago: t.metodo_pago
+      })) as Transaccion[];
+      
+      setTransacciones(transaccionesFormateadas);
+    } catch (error) {
+      console.error('Error fetching transacciones:', error);
+    }
+  };
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -76,7 +103,7 @@ export function SeguimientoActividad() {
     }).format(value);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!descripcion || !categoria || !cuenta || !monto || !metodoPago) {
@@ -90,37 +117,53 @@ export function SeguimientoActividad() {
 
     const categoriaFinal = mostrarNuevaCategoria ? nuevaCategoria : categoria;
     
-    const nuevaTransaccion: Transaccion = {
-      id: Date.now().toString(),
-      tipo,
-      descripcion,
-      categoria: categoriaFinal,
-      cuenta,
-      fecha,
-      monto: parseFloat(monto),
-      metodoPago,
-      notas: notas || undefined,
-      recibo: recibo || undefined,
-    };
+    try {
+      const { data, error } = await supabase
+        .from('transacciones')
+        .insert([
+          {
+            tipo,
+            descripcion,
+            categoria: categoriaFinal,
+            cuenta,
+            fecha: fecha.toISOString().split('T')[0],
+            monto: parseFloat(monto),
+            metodo_pago: metodoPago,
+            notas: notas || null,
+            recibo: recibo?.name || null,
+          }
+        ])
+        .select();
 
-    setTransacciones([nuevaTransaccion, ...transacciones]);
-    
-    // Limpiar formulario
-    setDescripcion('');
-    setCategoria('');
-    setNuevaCategoria('');
-    setMostrarNuevaCategoria(false);
-    setCuenta('');
-    setMonto('');
-    setMetodoPago('');
-    setNotas('');
-    setRecibo(null);
-    setFecha(new Date());
+      if (error) throw error;
 
-    toast({
-      title: "Transacción agregada",
-      description: `${tipo === 'ingreso' ? 'Ingreso' : 'Gasto'} de ${formatCurrency(parseFloat(monto))} registrado exitosamente.`,
-    });
+      // Actualizar la lista de transacciones
+      await fetchTransacciones();
+      
+      // Limpiar formulario
+      setDescripcion('');
+      setCategoria('');
+      setNuevaCategoria('');
+      setMostrarNuevaCategoria(false);
+      setCuenta('');
+      setMonto('');
+      setMetodoPago('');
+      setNotas('');
+      setRecibo(null);
+      setFecha(new Date());
+
+      toast({
+        title: "Transacción agregada",
+        description: `${tipo === 'ingreso' ? 'Ingreso' : 'Gasto'} de ${formatCurrency(parseFloat(monto))} registrado exitosamente.`,
+      });
+    } catch (error) {
+      console.error('Error al guardar transacción:', error);
+      toast({
+        title: "Error",
+        description: "No se pudo guardar la transacción. Intenta de nuevo.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

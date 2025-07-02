@@ -1,39 +1,21 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, CreditCard } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
-// Datos de ejemplo para los gráficos
-const gastosPorCategoria = [
-  { nombre: 'Alimentación', valor: 800000, color: '#E76161' },
-  { nombre: 'Transporte', valor: 400000, color: '#1A5F7A' },
-  { nombre: 'Entretenimiento', valor: 300000, color: '#159947' },
-  { nombre: 'Servicios', valor: 500000, color: '#F39C12' },
-  { nombre: 'Otros', valor: 200000, color: '#9B59B6' },
-];
-
-const ingresosVsGastos = [
-  { mes: 'Ene', ingresos: 3500000, gastos: 2200000 },
-  { mes: 'Feb', ingresos: 3500000, gastos: 2400000 },
-  { mes: 'Mar', ingresos: 3600000, gastos: 2300000 },
-  { mes: 'Abr', ingresos: 3500000, gastos: 2500000 },
-  { mes: 'May', ingresos: 3700000, gastos: 2600000 },
-  { mes: 'Jun', ingresos: 3500000, gastos: 2200000 },
-];
-
-const saldosCuenta = [
-  { fecha: '1 Jun', saldo: 2500000 },
-  { fecha: '8 Jun', saldo: 2800000 },
-  { fecha: '15 Jun', saldo: 2600000 },
-  { fecha: '22 Jun', saldo: 3200000 },
-  { fecha: '29 Jun', saldo: 3500000 },
-];
-
-const cuentasIndividuales = [
-  { cuenta: 'Cuenta Corriente', ingresos: 3500000, gastos: 1800000, saldo: 1700000 },
-  { cuenta: 'Cuenta de Ahorros', ingresos: 200000, gastos: 400000, saldo: 1800000 },
-  { cuenta: 'Tarjeta de Crédito', ingresos: 0, gastos: 2000000, saldo: -2000000 },
-];
+interface Transaccion {
+  id: string;
+  tipo: 'ingreso' | 'gasto';
+  descripcion: string;
+  categoria: string;
+  cuenta: string;
+  fecha: string;
+  monto: number;
+  metodo_pago: string;
+  notas?: string;
+  recibo?: string;
+}
 
 const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('es-CO', {
@@ -62,9 +44,119 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export function DashboardFinanciero() {
+  const [transacciones, setTransacciones] = useState<Transaccion[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchTransacciones();
+  }, []);
+
+  const fetchTransacciones = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('transacciones')
+        .select('*')
+        .order('fecha', { ascending: false });
+
+      if (error) throw error;
+      setTransacciones((data || []) as Transaccion[]);
+    } catch (error) {
+      console.error('Error fetching transacciones:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Calcular datos para los gráficos
+  const gastosPorCategoria = transacciones
+    .filter(t => t.tipo === 'gasto')
+    .reduce((acc, transaccion) => {
+      const categoria = transaccion.categoria;
+      const existing = acc.find(item => item.nombre === categoria);
+      if (existing) {
+        existing.valor += transaccion.monto;
+      } else {
+        acc.push({
+          nombre: categoria,
+          valor: transaccion.monto,
+          color: getCategoryColor(categoria)
+        });
+      }
+      return acc;
+    }, [] as { nombre: string; valor: number; color: string }[]);
+
+  // Calcular ingresos vs gastos por mes
+  const ingresosVsGastos = transacciones.reduce((acc, transaccion) => {
+    const fecha = new Date(transaccion.fecha);
+    const mes = fecha.toLocaleDateString('es-CO', { month: 'short' });
+    const existing = acc.find(item => item.mes === mes);
+    
+    if (existing) {
+      if (transaccion.tipo === 'ingreso') {
+        existing.ingresos += transaccion.monto;
+      } else {
+        existing.gastos += transaccion.monto;
+      }
+    } else {
+      acc.push({
+        mes,
+        ingresos: transaccion.tipo === 'ingreso' ? transaccion.monto : 0,
+        gastos: transaccion.tipo === 'gasto' ? transaccion.monto : 0
+      });
+    }
+    return acc;
+  }, [] as { mes: string; ingresos: number; gastos: number }[]);
+
+  // Calcular evolución del saldo
+  const saldosCuenta = transacciones
+    .sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime())
+    .reduce((acc, transaccion, index) => {
+      const fecha = new Date(transaccion.fecha).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
+      const saldoAnterior = index > 0 ? acc[acc.length - 1].saldo : 0;
+      const cambio = transaccion.tipo === 'ingreso' ? transaccion.monto : -transaccion.monto;
+      
+      acc.push({
+        fecha,
+        saldo: saldoAnterior + cambio
+      });
+      return acc;
+    }, [] as { fecha: string; saldo: number }[]);
+
+  // Calcular resumen por cuenta
+  const cuentasIndividuales = transacciones.reduce((acc, transaccion) => {
+    const cuenta = transaccion.cuenta;
+    const existing = acc.find(item => item.cuenta === cuenta);
+    
+    if (existing) {
+      if (transaccion.tipo === 'ingreso') {
+        existing.ingresos += transaccion.monto;
+        existing.saldo += transaccion.monto;
+      } else {
+        existing.gastos += transaccion.monto;
+        existing.saldo -= transaccion.monto;
+      }
+    } else {
+      acc.push({
+        cuenta,
+        ingresos: transaccion.tipo === 'ingreso' ? transaccion.monto : 0,
+        gastos: transaccion.tipo === 'gasto' ? transaccion.monto : 0,
+        saldo: transaccion.tipo === 'ingreso' ? transaccion.monto : -transaccion.monto
+      });
+    }
+    return acc;
+  }, [] as { cuenta: string; ingresos: number; gastos: number; saldo: number }[]);
+
   const saldoTotal = cuentasIndividuales.reduce((total, cuenta) => total + cuenta.saldo, 0);
   const ingresosTotal = cuentasIndividuales.reduce((total, cuenta) => total + cuenta.ingresos, 0);
   const gastosTotal = cuentasIndividuales.reduce((total, cuenta) => total + cuenta.gastos, 0);
+
+  if (loading) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto space-y-6">
+        <div className="text-center">Cargando datos financieros...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -213,4 +305,19 @@ export function DashboardFinanciero() {
       </Card>
     </div>
   );
+}
+
+function getCategoryColor(categoria: string): string {
+  const colors: { [key: string]: string } = {
+    'Alimentación': '#E76161',
+    'Transporte': '#1A5F7A',
+    'Entretenimiento': '#159947',
+    'Servicios': '#F39C12',
+    'Salud': '#9B59B6',
+    'Educación': '#3498DB',
+    'Compras': '#E67E22',
+    'Salario': '#27AE60',
+    'Trabajo Extra': '#2ECC71'
+  };
+  return colors[categoria] || '#95A5A6';
 }
